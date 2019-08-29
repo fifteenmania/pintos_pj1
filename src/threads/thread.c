@@ -37,6 +37,8 @@ static struct thread *idle_thread;
 /* Initial thread, the thread running init.c:main(). */
 static struct thread *initial_thread;
 
+static struct list sleep_list;
+
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
@@ -403,8 +405,11 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
-  thread_yield ();
+  struct thread *cur_t = thread_current ();
+  int old_priority = cur_t->priority;
+  cur_t->priority = new_priority;
+  if (new_priority < old_priority)
+    thread_yield ();
 }
 
 /* Returns the current thread's priority. */
@@ -444,7 +449,7 @@ thread_get_recent_cpu (void)
   /* Not yet implemented. */
   return 0;
 }
-
+
 /* Idle thread.  Executes when no other thread is ready to run.
 
    The idle thread is initially put on the ready list by
@@ -493,8 +498,8 @@ kernel_thread (thread_func *function, void *aux)
   function (aux);       /* Execute the thread function. */
   thread_exit ();       /* If function() returns, kill the thread. */
 }
-
-/* Returns the running thread. */
+
+/* Returns the running thread. */
 struct thread *
 running_thread (void) 
 {
