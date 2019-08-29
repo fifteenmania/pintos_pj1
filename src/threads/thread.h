@@ -92,14 +92,17 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+    struct list_elem slpelem;           /* Sleep list element. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
 #endif
 
+    int64_t wakeup_ticks;                /* Tick to wake up */
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+
   };
 
 /* If false (default), use round-robin scheduler.
@@ -119,6 +122,10 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 void thread_block (void);
 void thread_unblock (struct thread *);
 
+int64_t get_closest_wakeup (void);
+void thread_sleep (int64_t wakeup_ticks);
+void threads_wakeup (int64_t ticks);
+
 struct thread *thread_current (void);
 tid_t thread_tid (void);
 const char *thread_name (void);
@@ -137,5 +144,7 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+void update_closest_wakeup (int64_t);
 
 #endif /* threads/thread.h */

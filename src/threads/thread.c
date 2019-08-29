@@ -28,6 +28,9 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
+/* List of sleeping processes. */
+static struct list sleep_list;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -44,6 +47,9 @@ struct kernel_thread_frame
     thread_func *function;      /* Function to call. */
     void *aux;                  /* Auxiliary data for function. */
   };
+
+/* Closest time to wake up thread */
+static int64_t closest_wakeup;
 
 /* Statistics. */
 static long long idle_ticks;    /* # of timer ticks spent idle. */
@@ -70,6 +76,10 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+static bool cmp_priority (const struct list_elem *lhs, const struct list_elem *rhs,
+                         void *AUX UNUSED);
+
+
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -92,6 +102,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&sleep_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -200,6 +211,8 @@ thread_create (const char *name, int priority,
 
   /* Add to run queue. */
   thread_unblock (t);
+  if (running_thread ()->priority < priority)
+    thread_yield ();
 
   return tid;
 }
@@ -234,11 +247,66 @@ thread_unblock (struct thread *t)
   enum intr_level old_level;
 
   ASSERT (is_thread (t));
-
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  list_insert_ordered (&ready_list, &t->elem, cmp_priority, 0);
   t->status = THREAD_READY;
+  // what happens if thread_yield () is here?
+  intr_set_level (old_level);
+}
+
+/* Put current thread to sleep until given ticks. */
+void
+thread_sleep (int64_t wakeup_ticks)
+{
+  struct thread *cur_thread = thread_current ();
+  
+  enum intr_level old_level = intr_disable ();
+  cur_thread->wakeup_ticks = wakeup_ticks;
+  update_closest_wakeup (wakeup_ticks);
+  list_push_back (&sleep_list, &cur_thread->slpelem);
+  thread_block ();
+  intr_set_level (old_level);
+}
+
+/* Set closest_wakeup to closest wakeup ticks. */
+void 
+update_closest_wakeup (int64_t wakeup_ticks)
+{
+  closest_wakeup = (closest_wakeup > wakeup_ticks) ? 
+                   wakeup_ticks : closest_wakeup;
+}
+
+/* Return closest ticks to wake up threads */
+int64_t
+get_closest_wakeup (void)
+{
+  return closest_wakeup;
+}
+
+/* Wake up all sleeping threads */
+void
+threads_wakeup (int64_t ticks)
+{
+  // potential issues 1. timer ticks integer overflow?
+  //                  2. use elem?
+  enum intr_level old_level = intr_disable ();
+  struct list_elem *e;
+  int64_t closest_wakeup_temp = INT64_MAX;
+  //printf ("wakeup called\n");
+  for (e = list_begin (&sleep_list); e != list_end (&sleep_list);
+       e = list_next (e))
+    {
+      struct thread *wake_thread = list_entry (e, struct thread, slpelem);
+      int64_t wakeup_ticks = wake_thread->wakeup_ticks;
+      closest_wakeup_temp = (closest_wakeup_temp > wakeup_ticks) ?
+                            wakeup_ticks : closest_wakeup_temp;
+      if (wakeup_ticks <= ticks) {
+        list_remove (e);
+        thread_unblock (wake_thread);
+      }
+    }
+  closest_wakeup = closest_wakeup_temp;
   intr_set_level (old_level);
 }
 
@@ -307,8 +375,8 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+  if (cur != idle_thread)
+    list_insert_ordered (&ready_list, &cur->elem, cmp_priority, 0);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -336,6 +404,7 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+  thread_yield ();
 }
 
 /* Returns the current thread's priority. */
@@ -578,7 +647,17 @@ allocate_tid (void)
 
   return tid;
 }
-
+
+/* Compare priority of two threads. */
+static bool
+cmp_priority (const struct list_elem *lhs, const struct list_elem *rhs,
+             void *AUX UNUSED)
+{
+  struct thread *lhs_t = list_entry(lhs, struct thread, elem),
+                *rhs_t = list_entry(rhs, struct thread, elem);
+  return lhs_t->priority > rhs_t->priority;
+}
+
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
