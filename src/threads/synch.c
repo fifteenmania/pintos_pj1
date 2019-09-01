@@ -32,6 +32,14 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+/* Auxiliary functions for priority scheduling. */
+static bool
+cmp_sema_priority (const struct list_elem *lhs, const struct list_elem *rhs, 
+                  void *AUX UNUSED);
+
+inline static int
+sema_highest_prioity (struct semaphore *sema);
+
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
    manipulating it:
@@ -68,7 +76,8 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
+      struct list *waiter_list = &sema->waiters;
+      list_push_back (waiter_list, &thread_current ()->elem);
       thread_block ();
     }
   sema->value--;
@@ -109,15 +118,21 @@ void
 sema_up (struct semaphore *sema) 
 {
   enum intr_level old_level;
-
+  struct thread *wake_thread = NULL;
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
+  if (!list_empty (&sema->waiters)) {
+    struct list_elem *max_waiter = list_pop_max (&sema->waiters, cmp_priority, NULL);
+    wake_thread = list_entry (max_waiter,
+                              struct thread, elem);
+    thread_unblock (wake_thread);
+  }
   sema->value++;
   intr_set_level (old_level);
+  if (wake_thread != NULL) {
+    priority_schedule (wake_thread -> priority);
+  }
 }
 
 static void sema_test_helper (void *sema_);
@@ -253,6 +268,8 @@ struct semaphore_elem
     struct semaphore semaphore;         /* This semaphore. */
   };
 
+
+
 /* Initializes condition variable COND.  A condition variable
    allows one piece of code to signal a condition and cooperating
    code to receive the signal and act upon it. */
@@ -316,9 +333,11 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (!list_empty (&cond->waiters)) 
-    sema_up (&list_entry (list_pop_front (&cond->waiters),
-                          struct semaphore_elem, elem)->semaphore);
+  if (!list_empty (&cond->waiters)) {
+    struct list_elem * prior_e = list_pop_max (&cond->waiters, 
+                                               cmp_sema_priority, NULL);
+    sema_up (&list_entry (prior_e, struct semaphore_elem, elem)->semaphore);
+  }
 }
 
 /* Wakes up all threads, if any, waiting on COND (protected by
@@ -336,3 +355,40 @@ cond_broadcast (struct condition *cond, struct lock *lock)
   while (!list_empty (&cond->waiters))
     cond_signal (cond, lock);
 }
+
+
+static bool
+cmp_sema_priority (const struct list_elem *lhs, const struct list_elem *rhs, 
+                   void *AUX UNUSED)
+{
+  struct semaphore *lsema = &list_entry (lhs, struct semaphore_elem, elem)->semaphore,
+                   *rsema = &list_entry (rhs, struct semaphore_elem, elem)->semaphore;
+  //printf ("%d\n", sema_highest_prioity (lsema));
+  return sema_highest_prioity (lsema) < sema_highest_prioity (rsema);
+}
+
+inline static int
+sema_highest_prioity (struct semaphore *sema)
+{
+  struct list *waiters = &sema->waiters;
+  return list_entry (list_begin (waiters), struct thread, elem) -> priority;
+}
+
+/* return highest priority in waiter list of semaphore. */
+/*
+static int
+sema_highest_prioity (struct semaphore *sema)
+{
+  struct list *waiters = &sema->waiters;
+  struct list_elem *e;
+  int pri;
+  int highest_pri = PRI_MIN;
+  for (e = list_begin (waiters); e != list_end (waiters);
+       e = list_next (e)) {
+         pri = list_entry (e, struct thread, elem)->priority;
+         highest_pri = (pri > highest_pri) ? pri : highest_pri;
+      }
+  //printf("highest: %d\n", highest_pri);
+  return highest_pri;
+  //return list_entry (list_begin (waiters), struct thread, elem) -> priority;
+}*/

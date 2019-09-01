@@ -78,10 +78,6 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
-static bool cmp_priority (const struct list_elem *lhs, const struct list_elem *rhs,
-                         void *AUX UNUSED);
-
-
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -213,8 +209,7 @@ thread_create (const char *name, int priority,
 
   /* Add to run queue. */
   thread_unblock (t);
-  if (running_thread ()->priority < priority)
-    thread_yield ();
+  priority_schedule (priority);
 
   return tid;
 }
@@ -251,7 +246,7 @@ thread_unblock (struct thread *t)
   ASSERT (is_thread (t));
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_insert_ordered (&ready_list, &t->elem, cmp_priority, 0);
+  list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   // what happens if thread_yield () is here?
   intr_set_level (old_level);
@@ -295,6 +290,7 @@ threads_wakeup (int64_t ticks)
   enum intr_level old_level = intr_disable ();
   struct list_elem *e;
   int64_t closest_wakeup_temp = INT64_MAX;
+  //int highest_priority = 0;
   //printf ("wakeup called\n");
   for (e = list_begin (&sleep_list); e != list_end (&sleep_list);
        e = list_next (e))
@@ -306,10 +302,20 @@ threads_wakeup (int64_t ticks)
       if (wakeup_ticks <= ticks) {
         list_remove (e);
         thread_unblock (wake_thread);
+        //highest_priority = (wake_thread->priority > highest_priority) ?
+        //                   wake_thread->priority : highest_priority;
       }
     }
   closest_wakeup = closest_wakeup_temp;
   intr_set_level (old_level);
+}
+
+/* Reschedule running thread if wakeup thread is prior than it. */
+void 
+priority_schedule (int priority)
+{
+  if (priority > running_thread ()->priority)
+    thread_yield ();
 }
 
 /* Returns the name of the running thread. */
@@ -378,7 +384,7 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread)
-    list_insert_ordered (&ready_list, &cur->elem, cmp_priority, 0);
+    list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -408,8 +414,7 @@ thread_set_priority (int new_priority)
   struct thread *cur_t = thread_current ();
   int old_priority = cur_t->priority;
   cur_t->priority = new_priority;
-  if (new_priority < old_priority)
-    thread_yield ();
+  priority_schedule (old_priority);
 }
 
 /* Returns the current thread's priority. */
@@ -567,7 +572,7 @@ next_thread_to_run (void)
   if (list_empty (&ready_list))
     return idle_thread;
   else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+    return list_entry (list_pop_max (&ready_list, cmp_priority, NULL), struct thread, elem);
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -654,13 +659,13 @@ allocate_tid (void)
 }
 
 /* Compare priority of two threads. */
-static bool
+bool
 cmp_priority (const struct list_elem *lhs, const struct list_elem *rhs,
              void *AUX UNUSED)
 {
   struct thread *lhs_t = list_entry(lhs, struct thread, elem),
                 *rhs_t = list_entry(rhs, struct thread, elem);
-  return lhs_t->priority > rhs_t->priority;
+  return lhs_t->priority < rhs_t->priority;
 }
 
 /* Offset of `stack' member within `struct thread'.
