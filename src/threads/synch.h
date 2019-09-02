@@ -28,6 +28,11 @@ void lock_init (struct lock *);
 void lock_acquire (struct lock *);
 bool lock_try_acquire (struct lock *);
 void lock_release (struct lock *);
+
+void donate_release_lock (struct lock *release_lock, struct thread *holder);
+void donate_up_priority (struct lock *lock, struct thread *waiter, int depth);
+void donate_down_priority (struct thread *holder, int depth);
+
 bool lock_held_by_current_thread (const struct lock *);
 
 /* Condition variable. */

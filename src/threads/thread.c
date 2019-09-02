@@ -314,7 +314,7 @@ threads_wakeup (int64_t ticks)
 void 
 priority_schedule (int priority)
 {
-  if (priority > running_thread ()->priority)
+  if (priority > thread_current ()->priority)
     thread_yield ();
 }
 
@@ -411,9 +411,11 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  struct thread *cur_t = thread_current ();
-  int old_priority = cur_t->priority;
-  cur_t->priority = new_priority;
+  struct thread *cur = thread_current ();
+  int old_priority = cur->priority;
+  cur->base_priority = new_priority;
+  donate_down_priority (cur, 0);
+  // Reschedule if priority is lowered.
   priority_schedule (old_priority);
 }
 
@@ -422,6 +424,12 @@ int
 thread_get_priority (void) 
 {
   return thread_current ()->priority;
+}
+
+void
+thread_restore_priority (struct thread *t, int priority)
+{
+  t->priority = priority;
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -541,7 +549,10 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->base_priority = priority;
+  t->wait_lock = NULL;
   t->magic = THREAD_MAGIC;
+  list_init (&t->donate_list);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -661,11 +672,27 @@ allocate_tid (void)
 /* Compare priority of two threads. */
 bool
 cmp_priority (const struct list_elem *lhs, const struct list_elem *rhs,
-             void *AUX UNUSED)
+              void *AUX UNUSED)
 {
   struct thread *lhs_t = list_entry(lhs, struct thread, elem),
                 *rhs_t = list_entry(rhs, struct thread, elem);
   return lhs_t->priority < rhs_t->priority;
+}
+
+bool
+donate_cmp_priority (const struct list_elem *lhs, const struct list_elem *rhs,
+                     void *AUX UNUSED)
+{
+  struct thread *lhs_t = list_entry(lhs, struct thread, donate_elem),
+                *rhs_t = list_entry(rhs, struct thread, donate_elem);
+  return lhs_t->priority < rhs_t->priority;
+}
+
+int
+list_max_priority (struct list *list)
+{
+  struct list_elem *e = list_max (list, cmp_priority, NULL);
+  return list_entry (e, struct thread, elem)->priority;
 }
 
 /* Offset of `stack' member within `struct thread'.

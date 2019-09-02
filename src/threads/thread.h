@@ -88,12 +88,16 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
-    int base_priority;                  /* Original priority before donation. */
+    int base_priority;
+     
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
     struct list_elem slpelem;           /* Sleep list element. */
+    struct list_elem donate_elem;
+    struct list donate_list; 
+    struct lock *wait_lock;     
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -141,6 +145,7 @@ void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
+void thread_restore_priority (struct thread *t, int priority);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
@@ -150,5 +155,9 @@ int thread_get_load_avg (void);
 void update_closest_wakeup (int64_t);
 bool cmp_priority (const struct list_elem *lhs, const struct list_elem *rhs,
                   void *AUX UNUSED);
+bool donate_cmp_priority (const struct list_elem *lhs, const struct list_elem *rhs,
+                          void *AUX UNUSED);
+int list_max_priority (struct list *list);
+
 
 #endif /* threads/thread.h */
